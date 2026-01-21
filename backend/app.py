@@ -1,3 +1,6 @@
+import sys
+print(f"Python version: {sys.version}")
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
