@@ -83,7 +83,7 @@ pip install -r requirements.txt
 python app.py
 
 
-and for the frontend
+and for the frontend run with another terminal
 
 cd frontend
 
