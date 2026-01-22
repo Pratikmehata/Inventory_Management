@@ -15,7 +15,7 @@ if database_url:
     
     if database_url.startswith('postgres://'):
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
-    print("✅ Connected to Render PostgreSQL")
+    print(" Connected to Render PostgreSQL")
 else:
     
     database_url = 'sqlite:///./inventory.db'
@@ -111,7 +111,7 @@ def get_db():
 @app.get("/", response_model=dict)
 async def home():
     return {
-        "message": "🚀 Inventory API Deployed on Render! (FastAPI Version)",
+        "message": " Inventory API Deployed on Render! (FastAPI Version)",
         "database": "PostgreSQL" if 'postgresql' in database_url else "SQLite",
         "status": "running",
         "endpoints": [
