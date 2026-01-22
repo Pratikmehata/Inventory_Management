@@ -7,25 +7,37 @@ from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field
 import os
+import urllib.parse
 
-#  DATABASE SETUP 
+
 database_url = os.getenv('DATABASE_URL')
 
 if database_url:
-    
+    # Parse and fix the database URL for Render
     if database_url.startswith('postgres://'):
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
+    
+    # Handle special characters in password
+    try:
+        parsed_url = urllib.parse.urlparse(database_url)
+        if parsed_url.password:
+            # URL encode the password if it contains special characters
+            encoded_password = urllib.parse.quote(parsed_url.password, safe='')
+            database_url = database_url.replace(parsed_url.password, encoded_password)
+    except:
+        pass
+    
     print(" Connected to Render PostgreSQL")
 else:
-    
+    # Local development fallback
     database_url = 'sqlite:///./inventory.db'
-    print("  Using SQLite (local development)")
+    print(" Using SQLite (local development)")
 
-engine = create_engine(database_url)
+engine = create_engine(database_url, pool_pre_ping=True)  # Add connection pool
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Database Model
+# ========== DATABASE MODELS ==========
 class ProductModel(Base):
     __tablename__ = "products"
     
@@ -49,7 +61,7 @@ class ProductModel(Base):
 # Create tables
 Base.metadata.create_all(bind=engine)
 
-#  PYDANTIC SCHEMAS 
+
 class ProductBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     category: str = Field(default='General', max_length=50)
@@ -83,17 +95,19 @@ class HealthResponse(BaseModel):
     database: str
     timestamp: datetime
 
-# FASTAPI APP
+# ========== FASTAPI APP ==========
 app = FastAPI(
     title="Inventory API",
-    description="FastAPI version of the Inventory Management System",
-    version="1.0.0"
+    description="FastAPI Inventory Management System",
+    version="1.0.0",
+    docs_url="/docs",  # Swagger UI at /docs
+    redoc_url="/redoc"  # ReDoc at /redoc
 )
 
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -107,29 +121,33 @@ def get_db():
     finally:
         db.close()
 
-#  API ROUTES 
+
 @app.get("/", response_model=dict)
 async def home():
     return {
-        "message": " Inventory API Deployed on Render! (FastAPI Version)",
+        "message": "🚀 Inventory API Deployed on Render! (FastAPI Version)",
         "database": "PostgreSQL" if 'postgresql' in database_url else "SQLite",
         "status": "running",
-        "endpoints": [
-            "GET /api/products - Get all products",
-            "POST /api/products - Add new product",
-            "GET /api/products/{id} - Get single product",
-            "PUT /api/products/{id} - Update product",
-            "DELETE /api/products/{id} - Delete product",
-            "GET /api/stats - Get inventory statistics",
-            "GET /api/health - Check API health"
-        ]
+        "endpoints": {
+            "products": "/api/products",
+            "health": "/api/health",
+            "stats": "/api/stats",
+            "documentation": "/docs"
+        }
     }
 
 @app.get("/api/health", response_model=HealthResponse)
-async def health():
+async def health(db: Session = Depends(get_db)):
+    try:
+        # Test database connection
+        db.execute("SELECT 1")
+        db_status = "connected"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+    
     return HealthResponse(
         status="healthy",
-        database="postgresql" if 'postgresql' in database_url else "sqlite",
+        database=db_status,
         timestamp=datetime.utcnow()
     )
 
@@ -175,7 +193,7 @@ async def delete_product(id: int, db: Session = Depends(get_db)):
     
     db.delete(product)
     db.commit()
-    return {"message": "Product deleted"}
+    return {"message": "Product deleted successfully"}
 
 @app.get("/api/stats", response_model=StatsResponse)
 async def stats(db: Session = Depends(get_db)):
@@ -190,8 +208,9 @@ async def stats(db: Session = Depends(get_db)):
         database_type="PostgreSQL" if 'postgresql' in database_url else "SQLite"
     )
 
-#  MAIN ENTRY POINT 
+
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv('PORT', 8000))
+    port = int(os.getenv("PORT", 8000))
+    print(f"🚀 Server starting on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
