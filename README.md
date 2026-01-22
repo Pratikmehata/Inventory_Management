@@ -4,9 +4,9 @@ A full-stack inventory management application built with React, Flask, and Postg
 
 ## 🌐 Live Demo
 
-- **Frontend (React):** https://inventory-frontend.onrender.com
-- **Backend API (Flask):** https://inventory-backend.onrender.com
-- **API Documentation:** https://inventory-backend.onrender.com/api/docs
+- **Frontend (React):** Demo will live soon
+- **Backend API (Fast):**[ https://inventory-backend.onrender.com](https://inventory-management-1-51nd.onrender.com)
+
 
 ## 🚀 Features
 
