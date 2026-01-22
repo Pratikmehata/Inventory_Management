@@ -1,41 +1,40 @@
-import sys
-print(f"Python version: {sys.version}")
-
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, func
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime
+from typing import List, Optional
+from pydantic import BaseModel, Field
 import os
 
-app = Flask(__name__)
-CORS(app)  # Allow React frontend to connect
-
-# ========== RENDER POSTGRESQL SETUP ==========
-# Render automatically provides DATABASE_URL environment variable
+#  DATABASE SETUP 
 database_url = os.getenv('DATABASE_URL')
 
 if database_url:
-    # FIX for Render's format: postgres:// → postgresql://
+    
     if database_url.startswith('postgres://'):
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
-    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
     print("✅ Connected to Render PostgreSQL")
 else:
-    # Local development fallback
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///inventory.db'
+    
+    database_url = 'sqlite:///./inventory.db'
     print("⚠️  Using SQLite (local development)")
 
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
+engine = create_engine(database_url)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-# ========== DATABASE MODEL ==========
-class Product(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    category = db.Column(db.String(50), default='General')
-    quantity = db.Column(db.Integer, default=0)
-    price = db.Column(db.Float, default=0.0)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+# Database Model
+class ProductModel(Base):
+    __tablename__ = "products"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    category = Column(String(50), default='General')
+    quantity = Column(Integer, default=0)
+    price = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=datetime.utcnow)
     
     def to_dict(self):
         return {
@@ -47,120 +46,152 @@ class Product(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
-# Create tables if they don't exist
-with app.app_context():
-    db.create_all()
-    print(f"✅ Database tables ready!")
+# Create tables
+Base.metadata.create_all(bind=engine)
 
-# ========== API ROUTES ==========
-@app.route('/')
-def home():
-    return jsonify({
-        "message": "🚀 Inventory API Deployed on Render!",
-        "database": "PostgreSQL" if 'postgresql' in app.config['SQLALCHEMY_DATABASE_URI'] else "SQLite",
+#  PYDANTIC SCHEMAS 
+class ProductBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    category: str = Field(default='General', max_length=50)
+    quantity: int = Field(default=0, ge=0)
+    price: float = Field(default=0.0, ge=0)
+
+class ProductCreate(ProductBase):
+    pass
+
+class ProductUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    category: Optional[str] = Field(None, max_length=50)
+    quantity: Optional[int] = Field(None, ge=0)
+    price: Optional[float] = Field(None, ge=0)
+
+class ProductResponse(ProductBase):
+    id: int
+    created_at: datetime
+    
+    class Config:
+        orm_mode = True
+
+class StatsResponse(BaseModel):
+    total_products: int
+    total_quantity: int
+    total_inventory_value: float
+    database_type: str
+
+class HealthResponse(BaseModel):
+    status: str
+    database: str
+    timestamp: datetime
+
+# FASTAPI APP
+app = FastAPI(
+    title="Inventory API",
+    description="FastAPI version of the Inventory Management System",
+    version="1.0.0"
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Dependency to get DB session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+#  API ROUTES 
+@app.get("/", response_model=dict)
+async def home():
+    return {
+        "message": "🚀 Inventory API Deployed on Render! (FastAPI Version)",
+        "database": "PostgreSQL" if 'postgresql' in database_url else "SQLite",
         "status": "running",
         "endpoints": [
             "GET /api/products - Get all products",
             "POST /api/products - Add new product",
-            "GET /api/products/<id> - Get single product",
-            "PUT /api/products/<id> - Update product",
-            "DELETE /api/products/<id> - Delete product"
+            "GET /api/products/{id} - Get single product",
+            "PUT /api/products/{id} - Update product",
+            "DELETE /api/products/{id} - Delete product",
+            "GET /api/stats - Get inventory statistics",
+            "GET /api/health - Check API health"
         ]
-    })
+    }
 
-@app.route('/api/health')
-def health():
-    return jsonify({
-        "status": "healthy",
-        "database": "connected" if 'postgresql' in app.config['SQLALCHEMY_DATABASE_URI'] else "sqlite",
-        "timestamp": datetime.utcnow().isoformat()
-    })
+@app.get("/api/health", response_model=HealthResponse)
+async def health():
+    return HealthResponse(
+        status="healthy",
+        database="postgresql" if 'postgresql' in database_url else "sqlite",
+        timestamp=datetime.utcnow()
+    )
 
-# GET all products
-@app.route('/api/products', methods=['GET'])
-def get_products():
-    products = Product.query.order_by(Product.created_at.desc()).all()
-    return jsonify([p.to_dict() for p in products])
+@app.get("/api/products", response_model=List[ProductResponse])
+async def get_products(db: Session = Depends(get_db)):
+    products = db.query(ProductModel).order_by(ProductModel.created_at.desc()).all()
+    return products
 
-# ADD new product
-@app.route('/api/products', methods=['POST'])
-def add_product():
-    try:
-        data = request.json
-        
-        # Validate required fields
-        if not data.get('name'):
-            return jsonify({"error": "Product name is required"}), 400
-            
-        product = Product(
-            name=data['name'],
-            category=data.get('category', 'General'),
-            quantity=data.get('quantity', 1),
-            price=data.get('price', 0.0)
-        )
-        
-        db.session.add(product)
-        db.session.commit()
-        
-        return jsonify({
-            "message": "Product added successfully!",
-            "product": product.to_dict()
-        }), 201
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+@app.post("/api/products", response_model=ProductResponse, status_code=201)
+async def add_product(product: ProductCreate, db: Session = Depends(get_db)):
+    db_product = ProductModel(**product.dict())
+    db.add(db_product)
+    db.commit()
+    db.refresh(db_product)
+    return db_product
 
-# GET single product
-@app.route('/api/products/<int:id>', methods=['GET'])
-def get_product(id):
-    product = Product.query.get(id)
+@app.get("/api/products/{id}", response_model=ProductResponse)
+async def get_product(id: int, db: Session = Depends(get_db)):
+    product = db.query(ProductModel).filter(ProductModel.id == id).first()
     if not product:
-        return jsonify({"error": "Product not found"}), 404
-    return jsonify(product.to_dict())
+        raise HTTPException(status_code=404, detail="Product not found")
+    return product
 
-# UPDATE product
-@app.route('/api/products/<int:id>', methods=['PUT'])
-def update_product(id):
-    product = Product.query.get(id)
+@app.put("/api/products/{id}", response_model=ProductResponse)
+async def update_product(id: int, product_update: ProductUpdate, db: Session = Depends(get_db)):
+    db_product = db.query(ProductModel).filter(ProductModel.id == id).first()
+    if not db_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    update_data = product_update.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_product, field, value)
+    
+    db.commit()
+    db.refresh(db_product)
+    return db_product
+
+@app.delete("/api/products/{id}")
+async def delete_product(id: int, db: Session = Depends(get_db)):
+    product = db.query(ProductModel).filter(ProductModel.id == id).first()
     if not product:
-        return jsonify({"error": "Product not found"}), 404
+        raise HTTPException(status_code=404, detail="Product not found")
     
-    data = request.json
-    product.name = data.get('name', product.name)
-    product.category = data.get('category', product.category)
-    product.quantity = data.get('quantity', product.quantity)
-    product.price = data.get('price', product.price)
-    
-    db.session.commit()
-    return jsonify({"message": "Product updated", "product": product.to_dict()})
+    db.delete(product)
+    db.commit()
+    return {"message": "Product deleted"}
 
-# DELETE product
-@app.route('/api/products/<int:id>', methods=['DELETE'])
-def delete_product(id):
-    product = Product.query.get(id)
-    if not product:
-        return jsonify({"error": "Product not found"}), 404
+@app.get("/api/stats", response_model=StatsResponse)
+async def stats(db: Session = Depends(get_db)):
+    total_products = db.query(func.count(ProductModel.id)).scalar()
+    total_quantity = db.query(func.sum(ProductModel.quantity)).scalar() or 0
+    total_value = db.query(func.sum(ProductModel.price * ProductModel.quantity)).scalar() or 0
     
-    db.session.delete(product)
-    db.session.commit()
-    return jsonify({"message": "Product deleted"})
+    return StatsResponse(
+        total_products=total_products,
+        total_quantity=total_quantity,
+        total_inventory_value=float(total_value),
+        database_type="PostgreSQL" if 'postgresql' in database_url else "SQLite"
+    )
 
-# STATS endpoint
-@app.route('/api/stats')
-def stats():
-    from sqlalchemy import func
-    
-    total_products = Product.query.count()
-    total_quantity = db.session.query(func.sum(Product.quantity)).scalar() or 0
-    total_value = db.session.query(func.sum(Product.price * Product.quantity)).scalar() or 0
-    
-    return jsonify({
-        "total_products": total_products,
-        "total_quantity": total_quantity,
-        "total_inventory_value": float(total_value),
-        "database_type": "PostgreSQL" if 'postgresql' in app.config['SQLALCHEMY_DATABASE_URI'] else "SQLite"
-    })
-
-if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+#  MAIN ENTRY POINT 
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv('PORT', 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
