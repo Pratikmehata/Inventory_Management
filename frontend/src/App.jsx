@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 
 // Update the API URL to FastAPI's default port (8000)
-const API_URL = '/api';  
+const API_URL = 'https://inventory-management-1-51nd.onrender.com/';  
 
 function App() {
   const [products, setProducts] = useState([]);
