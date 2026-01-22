@@ -19,7 +19,7 @@ if database_url:
 else:
     
     database_url = 'sqlite:///./inventory.db'
-    print("⚠️  Using SQLite (local development)")
+    print("  Using SQLite (local development)")
 
 engine = create_engine(database_url)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
