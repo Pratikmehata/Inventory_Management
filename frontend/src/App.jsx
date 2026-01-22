@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
 
-// Use proxy for local development
-const API_URL = '/api';  // Vite proxy will redirect to localhost:5000
+// Update the API URL to FastAPI's default port (8000)
+const API_URL = '/api';  
 
 function App() {
   const [products, setProducts] = useState([]);
@@ -13,15 +13,25 @@ function App() {
     price: 0
   });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   // Fetch products
   const fetchProducts = async () => {
     try {
+      setError('');
       const response = await fetch(`${API_URL}/products`);
+      
+      if (!response.ok) {
+        // FastAPI returns error details in JSON
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+      }
+      
       const data = await response.json();
       setProducts(data);
     } catch (error) {
       console.error('Error:', error);
+      setError(`Failed to load products: ${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -35,28 +45,50 @@ function App() {
   const handleChange = (e) => {
     setForm({
       ...form,
-      [e.target.name]: e.target.value
+      [e.target.name]: e.target.type === 'number' ? 
+        parseFloat(e.target.value) || 0 : 
+        e.target.value
     });
   };
 
   // Add product
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError('');
+    
     try {
+      // Prepare data for FastAPI (matches Pydantic model)
+      const productData = {
+        name: form.name.trim(),
+        category: form.category,
+        quantity: form.quantity,
+        price: parseFloat(form.price)
+      };
+
       const response = await fetch(`${API_URL}/products`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(form)
+        body: JSON.stringify(productData)
       });
       
-      if (response.ok) {
-        setForm({ name: '', category: 'Electronics', quantity: 1, price: 0 });
-        fetchProducts();
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
       }
+      
+      const newProduct = await response.json();
+      
+      // Reset form
+      setForm({ name: '', category: 'Electronics', quantity: 1, price: 0 });
+      
+      // Update products list (add new product to beginning)
+      setProducts([newProduct, ...products]);
+      
     } catch (error) {
       console.error('Error:', error);
+      setError(`Failed to add product: ${error.message}`);
     }
   };
 
@@ -64,15 +96,37 @@ function App() {
   const handleDelete = async (id) => {
     if (window.confirm('Delete this product?')) {
       try {
-        await fetch(`${API_URL}/products/${id}`, {
+        const response = await fetch(`${API_URL}/products/${id}`, {
           method: 'DELETE'
         });
-        fetchProducts();
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+        }
+        
+        // Remove product from state
+        setProducts(products.filter(product => product.id !== id));
+        
       } catch (error) {
         console.error('Error:', error);
+        setError(`Failed to delete product: ${error.message}`);
       }
     }
   };
+
+  // Calculate totals
+  const calculateTotals = () => {
+    const totalValue = products.reduce((sum, product) => 
+      sum + (product.price * product.quantity), 0
+    );
+    const totalQuantity = products.reduce((sum, product) => 
+      sum + product.quantity, 0
+    );
+    return { totalValue, totalQuantity };
+  };
+
+  const { totalValue, totalQuantity } = calculateTotals();
 
   if (loading) {
     return <div className="loading">Loading products...</div>;
@@ -80,7 +134,31 @@ function App() {
 
   return (
     <div className="app">
-      <h1>📦 Inventory Management</h1>
+      <h1>📦 Inventory Management (FastAPI)</h1>
+      
+      {/* Stats Summary */}
+      <div className="stats-container">
+        <div className="stat-card">
+          <h3>Total Products</h3>
+          <p className="stat-value">{products.length}</p>
+        </div>
+        <div className="stat-card">
+          <h3>Total Quantity</h3>
+          <p className="stat-value">{totalQuantity}</p>
+        </div>
+        <div className="stat-card">
+          <h3>Total Value</h3>
+          <p className="stat-value">${totalValue.toFixed(2)}</p>
+        </div>
+      </div>
+      
+      {/*Error Display */}
+      {error && (
+        <div className="error-message">
+          ⚠️ {error}
+          <button onClick={() => setError('')} className="close-error">×</button>
+        </div>
+      )}
       
       {/* Add Product Form */}
       <div className="form-container">
@@ -126,24 +204,41 @@ function App() {
 
       {/* Products List */}
       <div className="products-container">
-        <h2>Products ({products.length})</h2>
+        <div className="products-header">
+          <h2>Products ({products.length})</h2>
+          <button onClick={fetchProducts} className="refresh-btn">
+            🔄 Refresh
+          </button>
+        </div>
+        
         {products.length === 0 ? (
           <p className="empty">No products yet. Add one above!</p>
         ) : (
           <div className="products-grid">
             {products.map(product => (
               <div key={product.id} className="product-card">
-                <h3>{product.name}</h3>
-                <p className="category">{product.category}</p>
-                <div className="details">
-                  <span>Qty: {product.quantity}</span>
-                  <span className="price">${parseFloat(product.price).toFixed(2)}</span>
+                <div className="product-header">
+                  <h3>{product.name}</h3>
+                  <span className="product-id">#{product.id}</span>
                 </div>
+                <p className="category">📁 {product.category}</p>
+                <div className="details">
+                  <span>📦 Qty: {product.quantity}</span>
+                  <span className="price">💰 ${parseFloat(product.price).toFixed(2)}</span>
+                </div>
+                <div className="card-value">
+                  Value: ${(product.price * product.quantity).toFixed(2)}
+                </div>
+                {product.created_at && (
+                  <div className="created-at">
+                    Added: {new Date(product.created_at).toLocaleDateString()}
+                  </div>
+                )}
                 <button 
                   onClick={() => handleDelete(product.id)}
                   className="delete-btn"
                 >
-                  Delete
+                  🗑️ Delete
                 </button>
               </div>
             ))}
